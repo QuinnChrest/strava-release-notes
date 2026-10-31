@@ -1,0 +1,13 @@
+{
+  "name": "strava-release-notes",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --test",
+    "file": "node strava-to-notes.mjs",
+    "dry-run": "node strava-to-notes.mjs --dry-run",
+    "strava:auth": "node strava-auth.mjs"
+  }
+}

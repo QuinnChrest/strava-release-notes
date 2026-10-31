@@ -1,0 +1,65 @@
+name: Strava to Release Notes
+
+on:
+  schedule:
+    # GitHub cron is UTC with no time zones. 11 pm Central is 04:00 UTC in summer
+    # (CDT) and 05:00 UTC in winter (CST); the script lets only the one that is
+    # 11 pm in Chicago do the work.
+    - cron: '0 4 * * *'
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List what would be filed (counts and tags only), file nothing
+        type: boolean
+        default: false
+      days:
+        description: Days to look back, today included (1 to 6)
+        default: '2'
+      date:
+        description: Last day of the window, YYYY-MM-DD (default today in Chicago)
+        required: false
+
+permissions:
+  contents: read
+  actions: write # keepalive: re-enable this workflow so GitHub doesn't pause it after 60 quiet days
+
+concurrency:
+  group: strava-release-notes
+  cancel-in-progress: false
+
+jobs:
+  file:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node --test
+
+      - name: File the day's activities
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DAYS: ${{ inputs.days || '2' }}
+          DATE: ${{ inputs.date }}
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+          RELEASE_NOTES_TOKEN: ${{ secrets.RELEASE_NOTES_TOKEN }}
+          # Saves the refresh token when Strava rotates it (the old one stops working at once).
+          GH_TOKEN: ${{ secrets.STRAVA_SECRET_WRITER }}
+        run: |
+          args=(--days "$DAYS")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$DATE" ]; then args+=(--date "$DATE"); fi
+          node strava-to-notes.mjs "${args[@]}"
+
+      - name: Keep the schedule alive
+        if: always() && github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/enable" --silent
