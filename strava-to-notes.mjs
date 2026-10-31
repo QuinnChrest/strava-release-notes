@@ -212,7 +212,17 @@ async function stravaActivities(accessToken, { start, end }) {
       `${STRAVA_API}/athlete/activities?after=${after}&before=${before}&per_page=100&page=${page}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     )
-    if (res.status === 401) throw new Fatal('Strava refused the access token (401). Run `node strava-auth.mjs`.')
+    if (res.status === 401) {
+      // Strava says which permission is missing, e.g. "activity:read_permission missing"; it holds no secrets.
+      const why = await res
+        .json()
+        .then((j) => (j.errors ?? []).map((e) => `${e.field} ${e.code}`).join(', '))
+        .catch(() => '')
+      throw new Fatal(
+        `Strava refused the access token (401${why ? `: ${why}` : ''}). The refresh token needs activity:read_all; ` +
+          'run `node strava-auth.mjs` (not the token from Strava\'s API settings page).',
+      )
+    }
     if (res.status === 429) throw new Fatal('Strava rate limit hit (429); the next run will pick these up.')
     if (!res.ok) throw new Error(`Strava activities request failed (${res.status}).`)
     const batch = await res.json()
@@ -342,7 +352,11 @@ async function main() {
       clientSecret: process.env.STRAVA_CLIENT_SECRET,
       refreshToken,
     })
-    if (token.refresh_token && token.refresh_token !== refreshToken) warning = saveRotatedToken(token.refresh_token, fromDotEnv)
+    if (token.refresh_token && token.refresh_token !== refreshToken) {
+      warning = saveRotatedToken(token.refresh_token, fromDotEnv)
+      // Say so now: if a later step fails, this is the line that explains the next run's failure.
+      if (warning) console.log(process.env.GITHUB_ACTIONS ? `::error::${warning}` : warning)
+    }
     activities = await stravaActivities(token.access_token, window)
   }
   activities.sort((a, b) => Date.parse(a.start_date) - Date.parse(b.start_date))
@@ -377,9 +391,11 @@ async function main() {
     )
   }
 
-  const problems = [warning, counts.failed ? `${counts.failed} activities could not be filed.` : null].filter(Boolean)
-  for (const p of problems) console.log(process.env.GITHUB_ACTIONS ? `::error::${p}` : p)
-  return problems.length ? 1 : 0
+  if (counts.failed) {
+    const msg = `${counts.failed} activities could not be filed.`
+    console.log(process.env.GITHUB_ACTIONS ? `::error::${msg}` : msg)
+  }
+  return warning || counts.failed ? 1 : 0
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
